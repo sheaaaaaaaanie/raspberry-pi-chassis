@@ -1,0 +1,130 @@
+import picamera
+import picamera.array
+import cv2
+import time
+import numpy as np
+import RPi.GPIO as GPIO
+
+# Define HSV color range for green sticky note
+green_lower = np.array([34, 51, 65])
+green_upper = np.array([74, 146, 255])
+
+# Camera settings
+camera = picamera.PiCamera()
+camera.resolution = (640, 480)
+camera.framerate = 32
+rawframe = picamera.array.PiRGBArray(camera, size=(640, 480))
+
+# Delay to allow camera to warm up
+time.sleep(0.1)
+
+# GPIO motor pins
+GPIO.setmode(GPIO.BOARD)
+GPIO_Ain1, GPIO_Ain2, GPIO_Apwm = 11, 13, 15
+GPIO_Bin1, GPIO_Bin2, GPIO_Bpwm = 29, 31, 33
+
+for pin in [GPIO_Ain1, GPIO_Ain2, GPIO_Apwm, GPIO_Bin1, GPIO_Bin2, GPIO_Bpwm]:
+    GPIO.setup(pin, GPIO.OUT)
+    GPIO.output(pin, False)
+
+# PWM setup
+pwm_frequency = 1000
+base_speed = 40
+max_turn_adjustment = 25
+pwmA = GPIO.PWM(GPIO_Apwm, pwm_frequency)
+pwmB = GPIO.PWM(GPIO_Bpwm, pwm_frequency)
+pwmA.start(0)
+pwmB.start(0)
+
+# Tuning parameters
+threshold = 100          # Minimum pixels to respond
+dead_zone = 0.09          # Error range to treat as centered
+max_missing = 5           # Max frames allowed to miss green before stopping
+debug = True              # Toggle for printing
+
+missing_frames = 0        # Counter for how many frames have no green
+
+print("Tracking green sticky note. Press CTRL+C to exit.")
+
+try:
+    for frame in camera.capture_continuous(rawframe, format='bgr', use_video_port=True):
+        image = frame.array
+        image_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        greenmask = cv2.inRange(image_hsv, green_lower, green_upper)
+        greennumpixels = cv2.countNonZero(greenmask)
+
+        pnumx, pnumy = greenmask.shape
+        greenmask_center = greenmask[pnumx//4 : 3*pnumx//4, pnumy//4 : 3*pnumy//4]
+
+        height, width = greenmask_center.shape
+        left = greenmask_center[:, :width//3]
+        middle = greenmask_center[:, width//3 : 2*width//3]
+        right = greenmask_center[:, 2*width//3:]
+
+        pnumpixels_left = cv2.countNonZero(left)
+        pnumpixels_middle = cv2.countNonZero(middle)
+        pnumpixels_right = cv2.countNonZero(right)
+        pnumpixels_center = cv2.countNonZero(greenmask_center)
+
+        # Total green pixels in center zone
+        total = pnumpixels_left + pnumpixels_middle + pnumpixels_right
+
+        if total > threshold:
+            missing_frames = 0  # Reset since we see green
+
+            error = (pnumpixels_right - pnumpixels_left) / total
+
+            # Dead zone to prevent twitching
+            if abs(error) < dead_zone:
+                error = 0
+
+            # Proportional adjustment
+            adjustment = error * max_turn_adjustment
+            left_speed = base_speed - adjustment
+            right_speed = base_speed + adjustment
+
+            # Clamp to 0-100
+            left_speed = max(0, min(100, left_speed))
+            right_speed = max(0, min(100, right_speed))
+
+            # Move forward
+            GPIO.output(GPIO_Ain1, True)
+            GPIO.output(GPIO_Ain2, False)
+            GPIO.output(GPIO_Bin1, True)
+            GPIO.output(GPIO_Bin2, False)
+
+            pwmB.ChangeDutyCycle(left_speed)
+            pwmA.ChangeDutyCycle(right_speed)
+
+            if debug:
+                print(f"[MOVING] Green: {total}, Error: {error:.2f}, L: {left_speed:.0f}, R: {right_speed:.0f}")
+
+        else:
+            missing_frames += 1
+            if missing_frames >= max_missing:
+                pwmA.ChangeDutyCycle(0)
+                pwmB.ChangeDutyCycle(0)
+                if debug:
+                    print("[STOPPED] Green lost - stopping motors")
+
+        # Show debugging windows?
+        if debug:
+            masked = cv2.bitwise_and(image, image, mask=greenmask)
+            cv2.imshow("Original", image)
+            cv2.imshow("HSV", image_hsv)
+            cv2.imshow("Green Mask", greenmask)
+            cv2.imshow("Green Masked Image", masked)
+            cv2.waitKey(1)
+
+        # Prepare for next frame
+        rawframe.truncate(0)
+
+except KeyboardInterrupt:
+    print("Shutting down...")
+
+finally:
+    cv2.destroyAllWindows()
+    camera.close()
+    pwmA.stop()
+    pwmB.stop()
+    GPIO.cleanup()
