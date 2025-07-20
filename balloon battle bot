@@ -1,0 +1,246 @@
+# Sample code for interfacing with the USB wireless gamepad
+# This is non-blocking
+# It separates button and joystick events (to lower the risk of missing a button event when moving a joystick)
+
+
+
+
+# Libraries
+from evdev import InputDevice, categorize
+import RPi.GPIO as GPIO
+
+
+import time
+from adafruit_servokit import ServoKit
+
+
+# GPIO Mode (BOARD / BCM)
+GPIO.setmode(GPIO.BCM)
+
+
+# Initialize ServoKit for the PWA board.
+kit = ServoKit(channels=16)
+
+
+# Specify the channels you are using on the PWM driver
+channel_servo1 = 0
+channel_servo2 = 7
+channel_rotation1 = 2       # Continuous rotation servo
+
+
+# To set the servo range to 180 degrees
+# You can adjust the values if needed
+kit.servo[channel_servo1].set_pulse_width_range(400,2300)
+# This is to control a continuous rotation servo
+# It does not work for a DC motor
+kit.continuous_servo[channel_rotation1].set_pulse_width_range(1200,1800)
+
+
+
+
+# set GPIO Pins
+GPIO_Ain1 = 17
+GPIO_Ain2 = 27
+GPIO_Apwm = 22
+GPIO_Bin1 = 5
+GPIO_Bin2 = 6
+GPIO_Bpwm = 13
+
+
+# Set GPIO direction (IN / OUT)
+GPIO.setup(GPIO_Ain1, GPIO.OUT)
+GPIO.setup(GPIO_Ain2, GPIO.OUT)
+GPIO.setup(GPIO_Apwm, GPIO.OUT)
+GPIO.setup(GPIO_Bin1, GPIO.OUT)
+GPIO.setup(GPIO_Bin2, GPIO.OUT)
+GPIO.setup(GPIO_Bpwm, GPIO.OUT)
+
+
+# Both motors are stopped
+GPIO.output(GPIO_Ain1, False)
+GPIO.output(GPIO_Ain2, False)
+GPIO.output(GPIO_Bin1, False)
+GPIO.output(GPIO_Bin2, False)
+
+
+# Set PWM parameters
+pwm_frequency = 1000
+
+
+# Create the PWM instances
+pwmA = GPIO.PWM(GPIO_Apwm, pwm_frequency)
+pwmB = GPIO.PWM(GPIO_Bpwm, pwm_frequency)
+
+
+# Set the duty cycle (between 0 and 100)
+# The duty cycle determines the speed of the wheels
+pwmA.start(100)
+pwmB.start(100)
+
+
+
+
+# Check if the gamepad is connected
+# You need to adjust the event number if the wrong input device is read
+gamepad = InputDevice('/dev/input/event0')
+print(gamepad)
+
+
+print("Press CTRL+C to end the program.")
+
+
+duration = 0.01
+
+
+# Main code
+try:
+
+
+       noError = True
+       while noError:
+
+
+
+
+           # Process the gamepad events
+           # This implementation is non-blocking
+           newbutton = False
+           newstick  = False
+           try:
+               for event in gamepad.read():            # Use this option (and comment out the next line) to react to the latest event only
+                   #event = gamepad.read_one()         # Use this option (and comment out the previous line) when you don't want to miss any event
+                   eventinfo = categorize(event)
+                   if event.type == 1:
+                       newbutton = True
+                       codebutton  = eventinfo.scancode
+                       valuebutton = eventinfo.keystate
+                   elif event.type == 3:
+                       newstick = True
+                       codestick  = eventinfo.event.code
+                       valuestick = eventinfo.event.value
+           except:
+               pass
+
+
+
+
+           # If there was a gamepad event, show it
+           if newbutton:
+               if codebutton == 305 and valuebutton == 1:
+                   GPIO.output(GPIO_Ain1, True)
+                   GPIO.output(GPIO_Ain2, False)
+                   GPIO.output(GPIO_Bin1, True)
+                   GPIO.output(GPIO_Bin2, False)
+                   pwmA.ChangeDutyCycle(60)               # duty cycle between 0 and 100
+                   pwmB.ChangeDutyCycle(60)               # duty cycle between 0 and 100
+                   print ("Right turn")
+                   time.sleep(0.5)
+               elif codebutton == 307 and valuebutton == 1:
+                   GPIO.output(GPIO_Ain1, False)
+                   GPIO.output(GPIO_Ain2, True)
+                   GPIO.output(GPIO_Bin1, False)
+                   GPIO.output(GPIO_Bin2, True)
+                   pwmA.ChangeDutyCycle(60)                # duty cycle between 0 and 100
+                   pwmB.ChangeDutyCycle(60)                # duty cycle between 0 and 100
+                   print ("Left turn")
+                   time.sleep(0.5)
+               elif codebutton == 304 and valuebutton == 1:
+                   GPIO.output(GPIO_Ain1, True)
+                   GPIO.output(GPIO_Ain2, False)
+                   GPIO.output(GPIO_Bin1, False)
+                   GPIO.output(GPIO_Bin2, True)
+                   pwmA.ChangeDutyCycle(90)               # duty cycle between 0 and 100
+                   pwmB.ChangeDutyCycle(100)               # duty cycle between 0 and 100
+                   print ("Forward full speed")
+                   time.sleep(1)
+               elif codebutton == 306 and valuebutton == 1:
+                   GPIO.output(GPIO_Ain1, False)
+                   GPIO.output(GPIO_Ain2, True)
+                   GPIO.output(GPIO_Bin1, True)
+                   GPIO.output(GPIO_Bin2, False)
+                   pwmA.ChangeDutyCycle(100)               # duty cycle between 0 and 100
+                   pwmB.ChangeDutyCycle(100)               # duty cycle between 0 and 100
+                   print ("Backwards full speed")
+                   time.sleep(1)
+               else:
+                   GPIO.output(GPIO_Ain1, False)
+                   GPIO.output(GPIO_Ain2, False)
+                   GPIO.output(GPIO_Bin1, False)
+                   GPIO.output(GPIO_Bin2, False)
+                   time.sleep(1)
+              
+           if newstick:
+               if codestick == 1 and valuestick == 0:
+                   channel = channel_servo2
+                   angle = 25
+                   kit.servo[channel].angle = angle
+                   print ('angle: {0} \t channel: {1}'.format(angle,channel))
+                          
+                   channel = channel_rotation1
+                   speed = 1
+                   kit.continuous_servo[channel].throttle = speed
+                   print ('speed: {0} \t channel: {1}'.format(speed,channel))
+                  
+                   time.sleep(duration)
+                  
+                  
+                   channel = channel_servo1
+                   angle = 180
+                   kit.servo[channel].angle = angle
+                   print ('angle: {0} \t channel: {1}'.format(angle,channel))
+                          
+                   channel = channel_rotation1
+                   speed = -1.0
+                   kit.continuous_servo[channel].throttle = speed
+                   print ('speed: {0} \t channel: {1}'.format(speed,channel))
+                  
+                   time.sleep(duration)
+              
+               elif codestick == 1 and valuestick == 128:
+
+
+                   channel = channel_servo2
+                   angle = 130
+                   kit.servo[channel].angle = angle
+                   print ('angle: {0} \t channel: {1}'.format(angle,channel))
+                          
+                   channel = channel_rotation1
+                   speed = -1.0
+                   kit.continuous_servo[channel].throttle = speed
+                   print ('speed: {0} \t channel: {1}'.format(speed,channel))
+                  
+                   time.sleep(duration)
+                  
+                   channel = channel_servo1
+                   angle = 90
+                   kit.servo[channel].angle = angle
+                   print ('angle: {0} \t channel: {1}'.format(angle,channel))
+                          
+                   channel = channel_rotation1
+                   speed = 1
+                   kit.continuous_servo[channel].throttle = speed
+                   print ('speed: {0} \t channel: {1}'.format(speed,channel))
+                  
+                   time.sleep(duration)
+                  
+           
+              
+
+
+
+
+# Quit the program when the user presses CTRL + C
+except KeyboardInterrupt:
+       pwmA.stop()
+       pwmB.stop()
+       GPIO.cleanup()
+       gamepad.close()
+       channel = channel_motor1
+       kit.continuous_servo[channel].throttle = 0
+      
+
+
+
+
+
+
